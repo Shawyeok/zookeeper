@@ -30,7 +30,11 @@ import io.prometheus.client.CollectorRegistry;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import javax.servlet.ServletException;
@@ -40,7 +44,9 @@ import org.apache.zookeeper.metrics.Counter;
 import org.apache.zookeeper.metrics.Gauge;
 import org.apache.zookeeper.metrics.MetricsContext;
 import org.apache.zookeeper.metrics.Summary;
+import org.apache.zookeeper.metrics.SummarySet;
 import org.hamcrest.CoreMatchers;
+import org.hamcrest.MatcherAssert;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -183,8 +189,9 @@ public class PrometheusMetricsProviderTest {
         final PrometheusMetricsProvider.PrometheusSummary summary =
                 (PrometheusMetricsProvider.PrometheusSummary) provider.getRootContext()
                 .getSummary("cc", MetricsContext.DetailLevel.BASIC);
-        summary.observe(10);
-        summary.observe(10);
+        summary.add(10);
+        summary.add(10);
+        summary.inner.rotate();
         int[] count = {0};
         provider.dump((k, v) -> {
             count[0]++;
@@ -230,11 +237,11 @@ public class PrometheusMetricsProviderTest {
 
     @Test
     public void testAdvancedSummary() throws Exception {
-        final PrometheusMetricsProvider.PrometheusSummary summary =
-                (PrometheusMetricsProvider.PrometheusSummary) provider.getRootContext()
+        Summary summary = provider.getRootContext()
                 .getSummary("cc", MetricsContext.DetailLevel.ADVANCED);
-        summary.observe(10);
-        summary.observe(10);
+        summary.add(10);
+        summary.add(10);
+        ((PrometheusMetricsProvider.PrometheusSummary) summary).inner.rotate();
         int[] count = {0};
         provider.dump((k, v) -> {
             count[0]++;
@@ -315,29 +322,51 @@ public class PrometheusMetricsProviderTest {
     }
 
     @Test
-    public void testSummary_asyncAndExceedMaxQueueSize() throws Exception {
-        final Properties config = new Properties();
-        config.setProperty("numWorkerThreads", "1");
-        config.setProperty("maxQueueSize", "1");
-        config.setProperty("httpPort", "0"); // ephemeral port
-        config.setProperty("exportJvmInfo", "false");
+    public void testSummarySet() throws Exception {
+        final String name = "ss";
+        final String[] keys = {"ns1", "ns2"};
+        final double count = 3.0;
 
-        PrometheusMetricsProvider metricsProvider = null;
+        // create and register a SummarySet
+        final SummarySet summarySet = provider.getRootContext()
+                .getSummarySet(name, MetricsContext.DetailLevel.BASIC);
+
+        // update the SummarySet multiple times
+        for (int i = 0; i < count; i++) {
+            Arrays.asList(keys).forEach(key -> summarySet.add(key, 1));
+        }
+        ((PrometheusMetricsProvider.PrometheusLabelledSummary) summarySet).inner.rotate();
+
+        // validate with dump call
+        final Map<String, Number> expectedMetricsMap = new HashMap<>();
+        for (final String key : keys) {
+            expectedMetricsMap.put(String.format("%s{key=\"%s\",quantile=\"0.5\"}", name, key), 1.0);
+            expectedMetricsMap.put(String.format("%s_count{key=\"%s\"}", name, key), count);
+            expectedMetricsMap.put(String.format("%s_sum{key=\"%s\"}", name, key), count);
+        }
+        validateWithDump(expectedMetricsMap);
+
+        // validate with servlet call
+        final List<String> expectedNames = Collections.singletonList(String.format("# TYPE %s summary", name));
+        final List<String> expectedMetrics = new ArrayList<>();
+        for (final String key : keys) {
+            expectedMetrics.add(String.format("%s{key=\"%s\",quantile=\"0.5\",} %s", name, key, 1.0));
+            expectedMetrics.add(String.format("%s_count{key=\"%s\",} %s", name, key, count));
+            expectedMetrics.add(String.format("%s_sum{key=\"%s\",} %s", name, key, count));
+        }
+        validateWithServletCall(expectedNames, expectedMetrics);
+
+        // validate registering with same name, no overwriting
+        assertSame(summarySet, provider.getRootContext()
+                .getSummarySet(name, MetricsContext.DetailLevel.BASIC));
+
+        // validate registering with different DetailLevel, not allowed
         try {
-            metricsProvider = new PrometheusMetricsProvider();
-            metricsProvider.configure(config);
-            metricsProvider.start();
-            final Summary summary =
-                    metricsProvider.getRootContext().getSummary("cc", MetricsContext.DetailLevel.ADVANCED);
-
-            // make sure no error is thrown
-            for (int i = 0; i < 10; i++) {
-                summary.add(10);
-            }
-        } finally {
-            if (metricsProvider != null) {
-               metricsProvider.stop();
-            }
+            provider.getRootContext()
+                    .getSummarySet(name, MetricsContext.DetailLevel.ADVANCED);
+            fail("Can't get the same summarySet with a different DetailLevel");
+        } catch (final IllegalArgumentException e) {
+            assertThat(e.getMessage(), containsString("Already registered"));
         }
     }
 
@@ -353,4 +382,21 @@ public class PrometheusMetricsProviderTest {
         return res;
     }
 
+    private void validateWithDump(final Map<String, Number> expectedMetrics) {
+        final Map<String, Object> returnedMetrics = new HashMap<>();
+        provider.dump(returnedMetrics::put);
+        assertEquals(expectedMetrics.size(), returnedMetrics.size());
+        expectedMetrics.forEach((key, value) -> assertEquals(value, returnedMetrics.get(key)));
+    }
+
+    private void validateWithServletCall(final List<String> expectedNames,
+                                         final List<String> expectedMetrics) throws Exception {
+        final String response = callServlet();
+        if (expectedNames.isEmpty() && expectedMetrics.isEmpty()) {
+            assertTrue(response.isEmpty());
+        } else {
+            expectedNames.forEach(name -> MatcherAssert.assertThat(response, CoreMatchers.containsString(name)));
+            expectedMetrics.forEach(metric -> MatcherAssert.assertThat(response, CoreMatchers.containsString(metric)));
+        }
+    }
 }
