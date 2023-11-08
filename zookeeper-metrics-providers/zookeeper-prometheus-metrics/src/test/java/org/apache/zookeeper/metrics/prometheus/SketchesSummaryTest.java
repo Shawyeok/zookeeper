@@ -20,12 +20,18 @@ package org.apache.zookeeper.metrics.prometheus;
 
 import static java.util.Arrays.binarySearch;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import io.prometheus.client.SketchesSummary;
 import java.util.Arrays;
 import java.util.Map;
 import java.util.Random;
 import java.util.SortedMap;
+import org.apache.datasketches.quantiles.DoublesSketch;
+import org.apache.datasketches.quantiles.DoublesUnion;
+import org.apache.datasketches.quantiles.DoublesUnionBuilder;
+import org.apache.datasketches.quantiles.UpdateDoublesSketch;
+import org.junit.Assert;
 import org.junit.Test;
 
 /**
@@ -57,6 +63,23 @@ public class SketchesSummaryTest {
         // The default k of DoublesSketches is 128, rank error of about 1.7%.
         // See more: org.apache.datasketches.quantiles.DoublesSketch
         assertQuantileError(samples, value.quantiles, 0.017);
+    }
+
+    @Test
+    public void testEmptySketch() {
+        SketchesSummary summary = SketchesSummary.build("testEmptySketch", "test help")
+                .quantile(0.5)
+                .quantile(0.9)
+                .quantile(0.99)
+                .create();
+        summary.observe(10);
+        summary.rotate();
+        summary.observe(10);
+        summary.rotate();
+        summary.rotate();
+        for (Double quantile : summary.get().quantiles.values()) {
+            assertTrue(Double.isNaN(quantile));
+        }
     }
 
     private static void assertQuantileError(int[] samples, SortedMap<Double, Double> quantiles, double delta) {
