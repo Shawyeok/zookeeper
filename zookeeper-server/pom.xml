@@ -160,6 +160,10 @@
       <artifactId>snappy-java</artifactId>
       <scope>provided</scope>
     </dependency>
+    <dependency>
+      <groupId>com.zhaopin</groupId>
+      <artifactId>zhaopinlayout-log4j</artifactId>
+    </dependency>
   </dependencies>
 
   <build>
