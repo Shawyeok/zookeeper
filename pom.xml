@@ -368,7 +368,7 @@
     <spotbugsannotations.version>4.0.2</spotbugsannotations.version>
     <checkstyle.version>8.19</checkstyle.version>
     <enforcer.version>3.0.0-M3</enforcer.version>
-    <zhaopinlayout.version>0.0.3</zhaopinlayout.version>
+    <zhaopinlayout.version>0.0.5</zhaopinlayout.version>
 
     <!-- parameter to pass to C client build -->
     <c-client-openssl>yes</c-client-openssl>
